@@ -2,28 +2,56 @@
 MOTION VAULT (feat. FE UGC ANIMATIONS engine)
 Made By @in66ar
 
+Changelog r3.2.0:
+  - FEAT: emote menu jadi half-wheel nempel di tepi kiri (dock tab "MV" + emoteArcFrame)
+  - FEAT: slot 1-4 pakai mini viewport 3D karakter yang looping emote pin-nya
+  - FEAT: animasi buka/tutup berurutan (arc -> slot 1..4 -> speed) pakai TweenService
+  - FEAT: tap di luar menu / tap dock lagi = nutup otomatis
+  - FIX: clone preview slot di-Destroy tiap menu ditutup (hemat RAM)
+
+Changelog r3.1.2:
+  - FIX: arah angle snap (FRONT 180, BACK 0, LEFT 90, RIGHT 270) + teks tombol AUTO aman
+  - UI: indikator pin pindah jadi badge "PIN n" di atas viewport kartu emote
+  - UI: tombol pin bawah jadi tombol aksi seragam ("+")
+  - UI: emote wheel dirombak: lingkaran 1:1 s(110), tanpa labelBar, stroke accent
+
+Changelog r3.1.1:
+  - UI: tombol pin di kartu emote dinamis (S1-S4 saat dipin, ikon pin saat tidak) + ikut theme
+  - UI: icon toggle header jadi ring vector, ukuran s(14), warna ikut theme
+  - UI: slot emote wheel cuma angka + info banner (labelBar) di bawah wheel
+  - FEAT: preview angle snap controller [FRONT] [LEFT] [RIGHT] [BACK] [AUTO]
+
+Changelog r3.1.0:
+  - FIX: memory leak emote cards (EM.tpl / EM.tplChar / clone viewport di-Destroy saat reset, gui destroyed, dan __FeUgcAnimKill)
+  - FIX: pcall kritis sekarang log error: [MOTION VAULT Error]
+  - FEAT: tombol header toggle Emote Wheel (6th header button)
+  - FEAT: floating Emote Wheel 4 slot (cross) + speed controller (1x / 1.5x / 2x / 0.5x)
+  - FEAT: tombol pin di kartu emote -> simpan ke slot wheel (cycling 1-2-3-4)
+  - FEAT: slot wheel tersimpan di MotionVault_QuickEmotes.json
+
 Changelog r3.0.1 (patched):
-  - FIX: preview emote nimpa status/slot animasi kalo pindah cepet (stopAllMaster bump previewEmoteGen + cek gen setelah resolve)
+  - FIX: preview emote nimpa status/slot animasi kalo pindah cepet
   - FIX: gui sekarang di-parent ke gethui/CoreGui (fallback PlayerGui)
-  - FIX: emote grid freeze pas scroll (template karakter di-cache, build kartu lewat antrian, 1 loop rotate cuma buat kartu yang kelihatan)
-  - FIX: placeholder search ikut tab (Emotes / animations)
-  - FIX: versi di subtitle
-
-Changelog r3.0.1:
-  - FIX: list Saved ke potong tombol Animations/Emotes (currentTab dideklarasi sebelum updateGridLayout)
-  - FIX: tombol segment & tab abu2 di mobile (hover tween ngalahin warna aktif -> _noHover)
-  - FIX: tombol X search box error (executeSearch dideklarasi sebelum dipakai)
-  - POLISH: transisi warna tab/segment smooth (tween), render kartu dipecah per-frame
-  - POLISH: header sejajar (tabs pill & tombol window satu garis, lebih ke atas)
-  - KEEP: ukuran GUI (W,H) tetap sama, preview border, pipeline animasi, theme
-
-Changelog r3.0.0:
-  - Rename: FE UGC ANIMATIONS -> MOTION VAULT (branding only)
-  - FIX: header overflow pada layar compact (tabsW clamp + titleW adaptif)
-  - FEAT: Saved tab segmented control (Animations / Emotes)
-  - FEAT: Save Emote (file baru FeUgcAnim_SavedEmotes.json)
-  - FEAT: Emote card SAVE button (paralel dengan animasi card)
+  - FIX: emote grid freeze pas scroll
+  - FIX: placeholder search ikut tab
 ]]
+
+-- ===== r3.1.0: helper table (satu table biar ga makan jatah 200 local) =====
+local WH = {
+	quickEmotes = {}, pinSlot = 1,
+	speeds = {1, 1.5, 2, 0.5}, speedIdx = 1, speed = 1,
+	slotBtns = {}, file = "MotionVault_QuickEmotes.json",
+	pinRefs = {}, angleBtns = {},
+	slots = {}, isOpen = false, animTok = 0,
+	isAutoRotate = true, targetAngle = 0, snapKey = nil,
+	loco = {idle=true, walk=true, run=true, jump=true, fall=true, climb=true,
+		swim=true, swimidle=true, sit=true, toolnone=true, toolslash=true, toollunge=true},
+}
+function WH.try(tag, fn, ...)
+	local ok, err = pcall(fn, ...)
+	if not ok then warn("[MOTION VAULT Error]: " .. tag .. " - " .. tostring(err)) end
+	return ok, err
+end
 
 local track
 do
@@ -31,6 +59,7 @@ do
 	if type(env.__FeUgcAnimKill) == "function" then pcall(env.__FeUgcAnimKill) end
 	local conns = {}
 	env.__FeUgcAnimKill = function()
+		if type(env.__MVCleanup) == "function" then pcall(env.__MVCleanup) end
 		for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
 		table.clear(conns)
 		local roots = {}
@@ -157,8 +186,8 @@ function debouncedWrite(file, jsonString, delay)
 		local s = _pendingWrites[file]
 		if s == nil then return end
 		_writeToken[file] = nil; _pendingWrites[file] = nil; _writeTimers[file] = nil
-		local ok = pcall(function() writefile(file, s) end)
-		if not ok then warn("[debouncedWrite] write failed: " .. tostring(file)) end
+		local ok, err = pcall(function() writefile(file, s) end)
+		if not ok then warn("[MOTION VAULT Error]: write failed " .. tostring(file) .. " - " .. tostring(err)) end
 	end)
 end
 
@@ -169,8 +198,8 @@ function flushPendingWrites()
 		_writeTimers = {}; return
 	end
 	for f, s in pairs(_pendingWrites) do
-		local ok = pcall(function() writefile(f, s) end)
-		if not ok then warn("[flush] write failed: " .. tostring(f)) end
+		local ok, err = pcall(function() writefile(f, s) end)
+		if not ok then warn("[MOTION VAULT Error]: flush failed " .. tostring(f) .. " - " .. tostring(err)) end
 	end
 	_pendingWrites = {}; _writeToken = {}
 	for _, t in pairs(_writeTimers) do pcall(task.cancel, t) end
@@ -181,7 +210,7 @@ local sfxClick = nil
 do
 	local getAsset = getcustomasset or getsynasset
 	if getAsset and writefile and isfile and readfile then
-		pcall(function()
+		local okS, errS = pcall(function()
 			local needDownload = true
 			if isfile(SFX_FILE) then
 				local ok, sz = pcall(function() return #readfile(SFX_FILE) end)
@@ -198,6 +227,7 @@ do
 			end
 			if isfile(SFX_FILE) then sfxClick = getAsset(SFX_FILE) end
 		end)
+		if not okS then warn("[MOTION VAULT Error]: sfx load - " .. tostring(errS)) end
 	end
 end
 
@@ -307,7 +337,7 @@ task.spawn(function()
 	end
 	table.sort(emoteList, function(a,b) return a.Name:lower() < b.Name:lower() end)
 	emoteLoadStatus = #emoteList .. " emotes"
-	print("[MOTION VAULT r3.0.1] Emotes:", emoteLoadStatus, string.format("(%.1fs)", tick() - t))
+	print("[MOTION VAULT r3.2.0] Emotes:", emoteLoadStatus, string.format("(%.1fs)", tick() - t))
 end)
 
 local Themes = {
@@ -382,7 +412,6 @@ local savedBookmarks = {}
 local savedEmotes = {}
 local savedCategory = "Animations" -- "Animations" | "Emotes"
 
--- FIX r3.0.1: forward declaration (dipakai oleh fungsi yang didefinisikan lebih awal)
 local currentTab = "Discover"
 local executeSearch, refreshTabVisuals, refreshAnimButtonVisuals
 
@@ -398,7 +427,8 @@ local function loadJSON(file)
 	return {}
 end
 local function saveJSON(file, data)
-	pcall(function() writefile(file, hs:JSONEncode(data)) end)
+	local ok, err = pcall(function() writefile(file, hs:JSONEncode(data)) end)
+	if not ok then warn("[MOTION VAULT Error]: saveJSON " .. tostring(file) .. " - " .. tostring(err)) end
 end
 
 fileCache = loadJSON(CACHE_FILE_NAME)
@@ -409,11 +439,12 @@ savedEmotes = loadJSON(SAVED_EMOTES_FILE)
 task.spawn(function()
 	local ok, oc = pcall(function() return game:HttpGet(ANIM_CACHE_URL) end)
 	if ok and oc then
-		pcall(function()
+		local ok2, err2 = pcall(function()
 			local od = hs:JSONDecode(oc)
 			for k, v in pairs(od) do if not fileCache[k] then fileCache[k] = v end end
 			saveJSON(CACHE_FILE_NAME, fileCache)
 		end)
+		if not ok2 then warn("[MOTION VAULT Error]: anim cache merge - " .. tostring(err2)) end
 	end
 end)
 
@@ -548,12 +579,11 @@ local RIGHT_W = INNER_W - LEFT_W - s(1)
 
 local HB = math.max(s(32), 34)
 local HDR_BTN = s(26) HDR_GAP = s(7)
--- r3.0.1: geser baris header (tombol window + tabs). Negatif = naik, positif = turun.
-local HDR_Y = math.floor((PAD_TOP - s(4) - HDR_BTN) / 2) -- auto: tengah antara tepi atas window dan garis header
+local HDR_Y = math.floor((PAD_TOP - s(4) - HDR_BTN) / 2)
 local scrollW = s(4) VP_H = s(175) MIN_BTN_SIZE = s(60)
 local UI_BUSY = false TOGGLE_COOLDOWN = 0.15
 
-print("[MOTION VAULT r3.0.1] Layout: W="..W.." H="..H.." LEFT="..LEFT_W.." RIGHT="..RIGHT_W)
+print("[MOTION VAULT r3.2.0] Layout: W="..W.." H="..H.." LEFT="..LEFT_W.." RIGHT="..RIGHT_W)
 
 local function tween(obj, props, dur, style, dir)
 	local t = ts:Create(obj, TweenInfo.new(dur or 0.18, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out), props)
@@ -606,7 +636,7 @@ local iconSheet = nil
 do
 	local getAsset = getcustomasset or getsynasset
 	if getAsset and writefile and isfile and readfile then
-		pcall(function()
+		local okI, errI = pcall(function()
 			local need = true
 			if isfile(ICON_FILE) then
 				local ok, sz = pcall(function() return #readfile(ICON_FILE) end)
@@ -620,6 +650,7 @@ do
 			end
 			if isfile(ICON_FILE) then iconSheet = getAsset(ICON_FILE) end
 		end)
+		if not okI then warn("[MOTION VAULT Error]: icon sheet - " .. tostring(errI)) end
 	end
 end
 
@@ -763,7 +794,6 @@ end
 
 local gui = Instance.new("ScreenGui")
 gui.Name = "StudioAnimStudio"; gui.ResetOnSpawn = false
--- PATCH: parent ke gethui/CoreGui dulu, fallback ke PlayerGui
 pcall(function() gui.Parent = gp end)
 if not gui.Parent then gui.Parent = lp:WaitForChild("PlayerGui") end
 
@@ -965,7 +995,6 @@ local headerBar = Instance.new("Frame", mf)
 headerBar.Size = UDim2.new(1,0,0,PAD_TOP - s(6))
 headerBar.Position = UDim2.new(0,0,0,-PAD_TOP); headerBar.BackgroundTransparency = 1
 
--- r3.0.1: garis tipis pemisah header (sesuai mockup)
 do
 	local hdrLine = Instance.new("Frame", headerBar)
 	hdrLine.Name = "HeaderLine"
@@ -985,7 +1014,7 @@ createLabel(headerBar, {
 
 do
 local subLbl = createLabel(headerBar, {
-	text = "by @in66ar  ·  v3.0.1", font = FONT.subtitle, size = s(10),
+	text = "by @in66ar  ·  v3.2.0", font = FONT.subtitle, size = s(10),
 	align = Enum.TextXAlignment.Left,
 	uiSize = UDim2.new(1, -s(220), 0, s(14)),
 	pos = UDim2.new(0, s(2), 0, s(22)), textKey = "subtitle"
@@ -1001,10 +1030,10 @@ end
 local tabDiscoverBtn, tabSavedBtn, tabEmoteBtn
 do
 local titleW = IS_COMPACT and s(112) or s(150)
-local btnAreaW = 5 * HDR_BTN + 4 * HDR_GAP + s(8)
-local tabsW = math.clamp(W - titleW - btnAreaW - s(20), s(120), s(300))
+-- r3.1.0: 6 tombol header (ditambah wheel toggle)
+local btnAreaW = 6 * HDR_BTN + 5 * HDR_GAP + s(8)
+local tabsW = math.clamp(W - titleW - btnAreaW - s(20), s(100), s(300))
 
--- r3.0.1: tabs pill tingginya = tombol window, sejajar satu garis
 local PILL_H = HDR_BTN
 local tabsPill = Instance.new("Frame", headerBar)
 tabsPill.Size = UDim2.new(0, tabsW, 0, PILL_H)
@@ -1032,11 +1061,22 @@ tabEmoteBtn = createButton(tabsPill, {
 	text = "Emotes", font = FONT.tab, size = s(10),
 	bg = C.bg, textKey = "text", radius = PILL_H
 })
--- FIX r3.0.1: matiin hover tween biar warna tab aktif ga abu2 di mobile
 tabDiscoverBtn:SetAttribute("_noHover", true)
 tabSavedBtn:SetAttribute("_noHover", true)
 tabEmoteBtn:SetAttribute("_noHover", true)
 end
+
+-- r3.1.0: tombol toggle Emote Wheel (kiri soundBtn)
+WH.toggleBtn = createButton(headerBar, {
+	uiSize = UDim2.new(0, HDR_BTN, 0, HDR_BTN),
+	pos = UDim2.new(1, -(HDR_BTN*6 + HDR_GAP*5), 0, HDR_Y),
+	bgKey = "surface", bgTransparency = 0, text = "", radius = R_BUTTON,
+	strokeColor = C.strokeStrong, strokeKey = "strokeStrong"
+})
+WH.toggleBtn.Text = uchr(226,151,142) -- U+25CE ring vector
+WH.toggleBtn.TextSize = s(14)
+WH.toggleBtn:SetAttribute("_noHover", true)
+tagTheme(WH.toggleBtn, "TextColor3", "text")
 
 local soundBtn = createButton(headerBar, {
 	uiSize = UDim2.new(0, HDR_BTN, 0, HDR_BTN),
@@ -1205,8 +1245,6 @@ tagTheme(gridScroller, "ScrollBarImageColor3", "accentDim")
 createCorner(gridScroller, R_PANEL)
 createStroke(gridScroller, C.stroke, 1, 0.3, "stroke")
 
--- Segmented control untuk Saved tab (Animations / Emotes)
--- r3.0.1: opaque + posisi tepat di bawah search row (y=44, tinggi 28)
 local savedSegmentHolder = Instance.new("Frame", lp_frame)
 savedSegmentHolder.Name = "SavedSegment"
 savedSegmentHolder.Size = UDim2.new(1, -s(12), 0, s(28))
@@ -1242,7 +1280,6 @@ savedSegEmote.ZIndex = 4
 savedSegEmote:SetAttribute("_tk_BackgroundColor3", "bg")
 savedSegEmote:SetAttribute("_tk_TextColor3", "textMuted")
 
--- FIX r3.0.1: matiin hover tween (penyebab warna aktif jadi abu2 di mobile)
 savedSegAnim:SetAttribute("_noHover", true)
 savedSegEmote:SetAttribute("_noHover", true)
 
@@ -1268,10 +1305,8 @@ local function refreshSavedSegment(instant)
 end
 refreshSavedSegment(true)
 
--- FIX r3.0.1: currentTab sudah dideklarasi di atas, jadi fungsi ini benar-benar jalan
 local function updateGridLayout()
 	if currentTab == "Saved" then
-		-- segment: y=44..72, gap 6, grid mulai y=78, bottom tetap 28 dari bawah
 		gridScroller.Position = UDim2.new(0, s(6), 0, s(78))
 		gridScroller.Size = UDim2.new(1, -s(12), 1, -s(106))
 	else
@@ -1332,6 +1367,60 @@ createLabel(rp, {
 	textKey = "textMuted"
 })
 
+-- r3.1.1: preview angle snap controller
+function WH.paintAngle()
+	local t = Themes[Theme]
+	for key, b in pairs(WH.angleBtns) do
+		local on
+		if key == "AUTO" then on = WH.isAutoRotate
+		else on = (not WH.isAutoRotate) and WH.snapKey == key end
+		local bgK = on and "accent" or "bg"
+		local txK = on and "onAccent" or "textMuted"
+		b.BackgroundColor3 = t[bgK]; b.TextColor3 = t[txK]
+		b:SetAttribute("_tk_BackgroundColor3", bgK)
+		b:SetAttribute("_tk_TextColor3", txK)
+	end
+end
+
+do
+	local group = Instance.new("Frame", rp)
+	group.Name = "AngleGroup"
+	group.AnchorPoint = Vector2.new(1, 0)
+	group.Position = UDim2.new(1, -s(8), 0, s(4))
+	group.Size = UDim2.new(1, -s(78), 0, s(16))
+	group.BackgroundTransparency = 1
+	group.ZIndex = 5
+	-- {label, derajat} : FRONT 180, LEFT 90, RIGHT 270, BACK 0
+	local defs = {{"FRONT", 180}, {"LEFT", 90}, {"RIGHT", 270}, {"BACK", 0}, {"AUTO"}}
+	for i, d in ipairs(defs) do
+		local key = d[1]
+		local isAuto = (key == "AUTO")
+		local b = createButton(group, {
+			uiSize = UDim2.new(0.2, -2, 1, 0),
+			pos = UDim2.new(0.2 * (i - 1), 0, 0, 0),
+			bgKey = "bg", textKey = "textMuted",
+			text = key,
+			font = FONT.buttonSm, size = math.max(s(7), 8), radius = R_SMALL,
+			strokeColor = C.strokeStrong, strokeKey = "strokeStrong"
+		})
+		b:SetAttribute("_noHover", true)
+		b.MouseButton1Click:Connect(function()
+			if isAuto then
+				WH.isAutoRotate = not WH.isAutoRotate
+				WH.snapKey = nil
+				showToast(WH.isAutoRotate and "Auto rotate: ON" or "Auto rotate: OFF", "info")
+			else
+				WH.isAutoRotate = false
+				WH.targetAngle = d[2]
+				WH.snapKey = key
+			end
+			WH.paintAngle()
+		end)
+		WH.angleBtns[key] = b
+	end
+	WH.paintAngle()
+end
+
 local PREVIEW_INNER_WIDTH_RATIO  = 0.90
 local PREVIEW_INNER_HEIGHT_RATIO = 0.90
 
@@ -1359,7 +1448,6 @@ tagTheme(masterViewport, "BackgroundColor3", "overlay")
 createCorner(masterViewport, s(10))
 createStroke(masterViewport, C.stroke, 1, 0.3, "stroke")
 
--- PREVIEW BORDER DIPERTAHANKAN UTUH
 local previewBorder = Instance.new("ImageLabel", rp)
 previewBorder.Name = "PreviewBorder"
 previewBorder.Size = UDim2.new(1, -s(20), 0, VP_H + s(6))
@@ -1492,10 +1580,20 @@ local function buildViewportSkeleton(vpFrame)
 		cam.FieldOfView = 55
 		cam.CFrame = CFrame.new(Vector3.new(0, 1.2, 5.5), Vector3.new(0, 0.5, 0))
 	end
-	local angle = 0
+	local isMaster = (vpFrame.Name == "MasterViewport")
+	local angle = isMaster and math.rad(WH.targetAngle) or 0
 	local conn = rs.RenderStepped:Connect(function(dt)
 		if clone and clone.Parent and root and root.Parent then
-			angle = angle + math.rad(25*dt)
+			if not isMaster then
+				angle = angle + math.rad(25*dt)
+			elseif WH.isAutoRotate then
+				angle = angle + math.rad(25*dt)
+				WH.targetAngle = math.deg(angle) % 360
+			else
+				-- snap halus lewat jalur terpendek
+				local diff = (math.rad(WH.targetAngle) - angle + math.pi) % (2*math.pi) - math.pi
+				angle = angle + diff * math.min(1, dt * 12)
+			end
 			clone:PivotTo(CFrame.new(0,0,0) * CFrame.Angles(0, angle, 0))
 		end
 	end)
@@ -1520,7 +1618,7 @@ local function applyAnimationToCharacter(character, targetAnimations, slotType)
 	end
 	local cleanSlot = string.lower(slotType or "")
 	local fId = m[cleanSlot]; local success = false
-	withAnimateEnabled(animate, function()
+	local okW, errW = withAnimateEnabled(animate, function()
 		if not fId then return end
 		local folder = animate:FindFirstChild(fId); if not folder then return end
 		local payload, toCreate = {}, {}
@@ -1531,7 +1629,7 @@ local function applyAnimationToCharacter(character, targetAnimations, slotType)
 			table.insert(payload, {Name = na.Name, AnimationId = na.AnimationId})
 		end
 		if #toCreate == 0 then return end
-		local ok = pcall(function()
+		local ok, err = pcall(function()
 			for _, o in ipairs(folder:GetChildren()) do if o:IsA("Animation") then o:Destroy() end end
 			for _, na in ipairs(toCreate) do na.Parent = folder end
 		end)
@@ -1539,9 +1637,11 @@ local function applyAnimationToCharacter(character, targetAnimations, slotType)
 			equippedAnims[cleanSlot] = payload
 			saveJSON(EQUIPPED_FILE, equippedAnims); success = true
 		else
+			warn("[MOTION VAULT Error]: apply slot - " .. tostring(err))
 			for _, na in ipairs(toCreate) do pcall(function() na:Destroy() end) end
 		end
 	end)
+	if not okW then warn("[MOTION VAULT Error]: applyAnimationToCharacter - " .. tostring(errW)) end
 	task.wait(0.05); return success
 end
 
@@ -1550,7 +1650,7 @@ local function resetToDefaultAnimations()
 	local animate = char:FindFirstChild("Animate")
 	local human = char:FindFirstChildOfClass("Humanoid")
 	if not animate or not human then return false end
-	local ok = pcall(function()
+	local ok, err = pcall(function()
 		local desc = plrs:GetHumanoidDescriptionFromUserId(lp.UserId)
 		local rigType = human.RigType or Enum.HumanoidRigType.R15
 		local dummy = plrs:CreateHumanoidModelFromDescription(desc, rigType)
@@ -1568,7 +1668,11 @@ local function resetToDefaultAnimations()
 		end
 		dummy:Destroy(); task.wait(0.05); animate.Disabled = false
 	end)
-	if not ok then pcall(function() animate.Disabled = false end) return false end
+	if not ok then
+		warn("[MOTION VAULT Error]: reset animations - " .. tostring(err))
+		pcall(function() animate.Disabled = false end)
+		return false
+	end
 	for k in pairs(equippedAnims) do equippedAnims[k] = nil end
 	saveJSON(EQUIPPED_FILE, equippedAnims); return true
 end
@@ -1637,7 +1741,7 @@ local function applyBundleItemsToCharacter(items)
 		return result
 	end
 	preloadAnimations(tLoad)
-	withAnimateEnabled(animate, function()
+	local okW, errW = withAnimateEnabled(animate, function()
 		for _, tr in ipairs(human:GetPlayingAnimationTracks()) do
 			pcall(function() tr:AdjustWeight(0,0); tr:Stop(0) end)
 		end
@@ -1653,7 +1757,7 @@ local function applyBundleItemsToCharacter(items)
 					table.insert(toCreate, na)
 					table.insert(payload, {Name = na.Name, AnimationId = na.AnimationId})
 				end
-				local ok = pcall(function()
+				local ok, err = pcall(function()
 					for _, o in ipairs(folder:GetChildren()) do
 						if o:IsA("Animation") then o:Destroy() end
 					end
@@ -1662,11 +1766,15 @@ local function applyBundleItemsToCharacter(items)
 				if ok then
 					equippedAnims[string.lower(slot)] = payload
 					result.succeeded = result.succeeded + 1
-				else result.failed = result.failed + 1 end
+				else
+					warn("[MOTION VAULT Error]: bundle slot " .. tostring(slot) .. " - " .. tostring(err))
+					result.failed = result.failed + 1
+				end
 			end
 		end
 		saveJSON(EQUIPPED_FILE, equippedAnims)
 	end)
+	if not okW then warn("[MOTION VAULT Error]: applyBundleItems - " .. tostring(errW)) end
 	if result.succeeded > 0 and result.failed == 0 and result.no_data == 0 then
 		result.status = "full_success"
 	elseif result.succeeded > 0 then result.status = "partial"
@@ -1691,7 +1799,7 @@ local function wearBundleQuickly(bundleId, onDone)
 			local r = applyBundleItemsToCharacter(items)
 			success = (r and (r.status == "full_success" or r.status == "partial"))
 		end)
-		if not ok then warn("[wearBundleQuickly] error:", err) end
+		if not ok then warn("[MOTION VAULT Error]: wearBundleQuickly - " .. tostring(err)) end
 		if onDone then pcall(onDone, success) end
 	end)
 end
@@ -1715,23 +1823,31 @@ local function toggleEmoteSave(emote)
 	saveJSON(SAVED_EMOTES_FILE, savedEmotes); return nowSaved
 end
 
-local function playEmoteFromList(e)
+-- r3.1.0: playEmoteFromList sekarang nerima speed (dipakai emote wheel)
+local function playEmoteFromList(e, speed)
 	local char = lp.Character
 	if not char then showToast("Character belum spawn", "warn") return end
 	local humanoid = char:FindFirstChildOfClass("Humanoid")
 	if not humanoid then showToast("Humanoid nggak ketemu", "error") return end
 	showToast("Playing: " .. truncate(e.Name, 20), "success")
+	local function speedLater()
+		task.delay(0.15, function() WH.applySpeed(speed) end)
+	end
 	local ok1, r1 = pcall(function() return humanoid:PlayEmote(e.Name) end)
-	if ok1 and r1 then return end
+	if ok1 and r1 then speedLater() return end
+	if not ok1 then warn("[MOTION VAULT Error]: " .. tostring(r1)) end
 	task.spawn(function()
-		pcall(function()
+		local ok, err = pcall(function()
 			local desc = humanoid:FindFirstChildOfClass("HumanoidDescription")
-			if desc then
-				desc:SetEmotes({[e.Name] = {e.Id}}); task.wait(0.2)
-				local ok2, r2 = pcall(function() return humanoid:PlayEmote(e.Name) end)
-				if not ok2 or not r2 then showToast("Gagal play: " .. e.Name, "error") end
-			end
+			if not desc then error("HumanoidDescription not found") end
+			desc:SetEmotes({[e.Name] = {e.Id}}); task.wait(0.2)
+			if not humanoid:PlayEmote(e.Name) then error("PlayEmote returned false") end
+			speedLater()
 		end)
+		if not ok then
+			warn("[MOTION VAULT Error]: " .. tostring(err))
+			showToast("Gagal play: " .. e.Name, "error")
+		end
 	end)
 end
 
@@ -1740,7 +1856,7 @@ local function resolveEmoteAnimId(emoteId)
 	if emoteAnimCache[key] ~= nil then return emoteAnimCache[key] end
 	if type(game.GetObjects) ~= "function" then return nil end
 	local resolved = nil
-	pcall(function()
+	local ok, err = pcall(function()
 		local objs = game:GetObjects("rbxassetid://" .. key)
 		if objs and #objs > 0 then
 			local function findAnim(obj)
@@ -1757,9 +1873,405 @@ local function resolveEmoteAnimId(emoteId)
 			for _, o in ipairs(objs) do pcall(function() o:Destroy() end) end
 		end
 	end)
+	if not ok then warn("[MOTION VAULT Error]: resolveEmoteAnimId " .. key .. " - " .. tostring(err)) end
 	emoteAnimCache[key] = resolved or false
 	return resolved
 end
+
+-- ===== r3.1.0: EMOTE WHEEL =====
+function WH.applySpeed(speed)
+	speed = speed or WH.speed
+	local char = lp.Character
+	local human = char and char:FindFirstChildOfClass("Humanoid")
+	if not human then return end
+	local animate = char:FindFirstChild("Animate")
+	for _, tr in ipairs(human:GetPlayingAnimationTracks()) do
+		local a = tr.Animation
+		local isLoco = a and animate and a.Parent and WH.loco[a.Parent.Name] and a:IsDescendantOf(animate)
+		if not isLoco then pcall(function() tr:AdjustSpeed(speed) end) end
+	end
+end
+
+function WH.press(btn)
+	local base = btn.Size
+	btn.MouseButton1Down:Connect(function() btn.Size = base - UDim2.new(0,0,0,1); SoundFx.click() end)
+	btn.MouseButton1Up:Connect(function() btn.Size = base end)
+end
+
+function WH.save()
+	local out = {}
+	for i = 1, 4 do
+		local e = WH.quickEmotes[i]
+		if e then out[tostring(i)] = {Id = e.Id, Name = e.Name} end
+	end
+	debouncedWrite(WH.file, hs:JSONEncode(out))
+end
+
+function WH.applySlotSpeed()
+	for _, sl in ipairs(WH.slots) do
+		if sl.tr then pcall(function() sl.tr:AdjustSpeed(WH.speed) end) end
+	end
+end
+
+function WH.update()
+	local t = Themes[Theme]
+	for i, sl in ipairs(WH.slots) do
+		local e = WH.quickEmotes[i]
+		local nxt = (i == WH.pinSlot)
+		local hot = (e ~= nil) or nxt
+		local sk = hot and "accent" or "strokeStrong"
+		sl.stroke:SetAttribute("_tk_Color", sk)
+		sl.stroke.Color = t[sk]
+		sl.stroke.Thickness = hot and 2 or 1
+		local pk = nxt and "accent" or "textMuted"
+		sl.plus:SetAttribute("_tk_TextColor3", pk)
+		sl.plus.TextColor3 = t[pk]
+		sl.plus.Visible = (e == nil)
+	end
+	if WH.speedBtn then WH.speedBtn.Text = string.format("%gx", WH.speed) end
+	for _, refresh in pairs(WH.pinRefs) do refresh() end
+end
+
+function WH.paintToggle(on)
+	local k = on and "accent" or "surface"
+	WH.toggleBtn:SetAttribute("_tk_BackgroundColor3", k)
+	local tk = on and "onAccent" or "text"
+	WH.toggleBtn:SetAttribute("_tk_TextColor3", tk)
+	tween(WH.toggleBtn, {BackgroundColor3 = Themes[Theme][k], TextColor3 = Themes[Theme][tk]}, 0.15)
+end
+
+function WH.paintDock()
+	if not WH.dockBody then return end
+	local open = WH.isOpen
+	local bgK = open and "accent" or "panel"
+	local tk = open and "onAccent" or "text"
+	WH.dockBody:SetAttribute("_tk_BackgroundColor3", bgK)
+	WH.dockLabel:SetAttribute("_tk_TextColor3", tk)
+	tween(WH.dockBody, {BackgroundColor3 = Themes[Theme][bgK], BackgroundTransparency = open and 0.1 or 0.2}, 0.15)
+	tween(WH.dockLabel, {TextColor3 = Themes[Theme][tk]}, 0.15)
+end
+
+-- ===== r3.2.0: mini 3D preview per slot =====
+function WH.clearSlot(i)
+	local sl = WH.slots[i]
+	if not sl then return end
+	sl.gen = sl.gen + 1 -- batalin build yang masih jalan
+	if sl.tr then
+		local tr = sl.tr; sl.tr = nil
+		WH.try("stop slot track", function() tr:Stop() end)
+	end
+	if sl.clone then
+		local c = sl.clone; sl.clone = nil
+		WH.try("destroy slot clone", function() c:Destroy() end)
+	end
+	for _, c in ipairs(sl.vp:GetChildren()) do
+		if c:IsA("WorldModel") or c:IsA("Camera") then c:Destroy() end
+	end
+	sl.vp.Visible = false
+end
+
+function WH.renderSlot(i)
+	local sl = WH.slots[i]
+	if not sl then return end
+	WH.clearSlot(i)
+	local e = WH.quickEmotes[i]
+	if not e or not WH.isOpen or not WH.getTemplate then return end
+	local gen = sl.gen
+	task.spawn(function()
+		local tpl = WH.getTemplate()
+		if not tpl or gen ~= sl.gen or not sl.btn.Parent then return end
+		local clone = tpl:Clone()
+		local wm = Instance.new("WorldModel", sl.vp)
+		clone.Parent = wm
+		clone:PivotTo(CFrame.Angles(0, math.pi, 0)) -- hadap kamera
+		local cam = Instance.new("Camera", sl.vp)
+		cam.FieldOfView = 40
+		cam.CFrame = CFrame.lookAt(Vector3.new(0, 0.3, 8.5), Vector3.new(0, -0.2, 0))
+		sl.vp.CurrentCamera = cam
+		sl.clone = clone
+		sl.vp.Visible = true
+		local human = clone:FindFirstChildOfClass("Humanoid")
+		local animator = human and (human:FindFirstChildOfClass("Animator") or Instance.new("Animator", human))
+		if not animator then return end
+		local aid = resolveEmoteAnimId(e.Id) -- bisa yield (GetObjects), hasilnya di-cache
+		if gen ~= sl.gen then return end
+		local anim = Instance.new("Animation")
+		anim.AnimationId = aid or ("rbxassetid://" .. tostring(e.Id))
+		WH.try("slot preview anim", function()
+			local tr = animator:LoadAnimation(anim)
+			tr.Looped = true; tr:Play(); tr:AdjustSpeed(WH.speed)
+			sl.tr = tr
+		end)
+	end)
+end
+
+-- pin emote ke slot aktif (dipanggil tombol "+" di kartu emote)
+function WH.pinEmote(e)
+	local slot = WH.pinSlot
+	local changed = {[slot] = true}
+	for i = 1, 4 do
+		local q = WH.quickEmotes[i]
+		if q and tostring(q.Id) == tostring(e.Id) then WH.quickEmotes[i] = nil; changed[i] = true end
+	end
+	WH.quickEmotes[slot] = {Id = e.Id, Name = e.Name}
+	WH.pinSlot = slot % 4 + 1 -- siklus 1 -> 2 -> 3 -> 4 -> 1
+	WH.update()
+	WH.save()
+	task.spawn(resolveEmoteAnimId, e.Id) -- panasin cache biar preview cepat
+	for i in pairs(changed) do WH.renderSlot(i) end
+	return slot
+end
+
+-- ===== r3.2.0: staggered open / close =====
+function WH.open()
+	if WH.isOpen or not WH.arc then return end
+	WH.isOpen = true
+	WH.animTok = WH.animTok + 1
+	local tok = WH.animTok
+	WH.paintDock()
+	WH.catcher.Visible = true
+	local arc = WH.arc
+	arc.Size = UDim2.new(0, 0, 0, 0)
+	arc.Position = UDim2.new(0, 0, 0.5, 0)
+	arc.Visible = true
+	for _, sl in ipairs(WH.slots) do sl.pop.Scale = 0 end
+	WH.speedPop.Scale = 0
+	-- a. arc canvas
+	tween(arc, {
+		Size = UDim2.new(0, WH.arcSize, 0, WH.arcSize),
+		Position = UDim2.new(0, WH.arcCX, 0.5, 0),
+	}, 0.2, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+	task.spawn(function()
+		task.wait(0.2)
+		-- b-d. slot 1 -> 4 (atas ke bawah), jeda 0.04
+		for i, sl in ipairs(WH.slots) do
+			if tok ~= WH.animTok then return end
+			WH.renderSlot(i)
+			tween(sl.pop, {Scale = 1}, 0.18, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+			task.wait(0.04)
+		end
+		-- f. speed button di tengah
+		if tok ~= WH.animTok then return end
+		tween(WH.speedPop, {Scale = 1}, 0.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+	end)
+end
+
+function WH.close(instant)
+	if not WH.isOpen or not WH.arc then return end
+	WH.isOpen = false
+	WH.animTok = WH.animTok + 1
+	local tok = WH.animTok
+	WH.paintDock()
+	WH.catcher.Visible = false
+	local function finish()
+		if tok ~= WH.animTok then return end -- dibuka lagi di tengah jalan
+		WH.arc.Visible = false
+		for i = 1, #WH.slots do WH.clearSlot(i) end -- bebasin RAM clone
+	end
+	if instant then
+		WH.arc.Size = UDim2.new(0, 0, 0, 0)
+		WH.arc.Position = UDim2.new(0, 0, 0.5, 0)
+		for _, sl in ipairs(WH.slots) do sl.pop.Scale = 0 end
+		WH.speedPop.Scale = 0
+		finish()
+		return
+	end
+	-- a. speed + slot mengecil ke 0
+	tween(WH.speedPop, {Scale = 0}, 0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+	for _, sl in ipairs(WH.slots) do
+		tween(sl.pop, {Scale = 0}, 0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+	end
+	-- b. arc collapse ke tepi kiri
+	task.delay(0.1, function()
+		if tok ~= WH.animTok then return end
+		tween(WH.arc, {
+			Size = UDim2.new(0, 0, 0, 0),
+			Position = UDim2.new(0, 0, 0.5, 0),
+		}, 0.18, Enum.EasingStyle.Quart, Enum.EasingDirection.In)
+		task.delay(0.2, finish)
+	end)
+end
+
+function WH.cleanup()
+	WH.isOpen = false
+	WH.animTok = WH.animTok + 1
+	for i = 1, #WH.slots do WH.clearSlot(i) end
+end
+
+function WH.build()
+	local data = loadJSON(WH.file)
+	for k, v in pairs(data) do
+		local n = tonumber(k)
+		if n and n >= 1 and n <= 4 and type(v) == "table" and v.Id and v.Name then
+			WH.quickEmotes[n] = {Id = v.Id, Name = tostring(v.Name)}
+		end
+	end
+
+	local DOCK_W, DOCK_H = s(26), s(58)
+	local SPD, SLOT, D = s(30), s(40), s(64)
+	local R = D + math.floor(SLOT / 2) + s(8)
+	WH.arcSize = R * 2
+	WH.arcCX = DOCK_W + math.floor(SPD / 2) + s(4)
+
+	-- penangkap tap di luar menu (modal ringan)
+	local catcher = Instance.new("TextButton")
+	catcher.Name = "EmoteCatcher"
+	catcher.Size = UDim2.new(1, 0, 1, 0)
+	catcher.BackgroundTransparency = 1
+	catcher.Text = ""; catcher.AutoButtonColor = false
+	catcher.Active = true; catcher.Visible = false; catcher.ZIndex = 19
+	catcher.Parent = gui
+	catcher.MouseButton1Click:Connect(function() WH.close() end)
+	WH.catcher = catcher
+
+	-- emoteArcFrame: lingkaran besar, setengahnya nempel di tepi kiri
+	local arc = Instance.new("Frame")
+	arc.Name = "emoteArcFrame"
+	arc.AnchorPoint = Vector2.new(0.5, 0.5)
+	arc.Position = UDim2.new(0, 0, 0.5, 0)
+	arc.Size = UDim2.new(0, 0, 0, 0)
+	arc.BackgroundColor3 = C.panel; arc.BackgroundTransparency = 0.35
+	arc.BorderSizePixel = 0; arc.Active = true
+	arc.Visible = false; arc.ZIndex = 20
+	tagTheme(arc, "BackgroundColor3", "panel")
+	Instance.new("UICorner", arc).CornerRadius = UDim.new(0.5, 0)
+	local arcAr = Instance.new("UIAspectRatioConstraint", arc)
+	arcAr.AspectRatio = 1
+	arcAr.AspectType = Enum.AspectType.FitWithinMaxSize
+	createStroke(arc, C.accent, 1, 0.4, "accent")
+	arc.Parent = gui
+	WH.arc = arc
+
+	-- 4 slot di busur: atas -> bawah
+	local angles = {-63, -21, 21, 63}
+	for i, deg in ipairs(angles) do
+		local rad = math.rad(deg)
+		local dx, dy = math.round(D * math.cos(rad)), math.round(D * math.sin(rad))
+		local b = Instance.new("TextButton")
+		b.Name = "Slot" .. i
+		b.AnchorPoint = Vector2.new(0.5, 0.5)
+		b.Position = UDim2.new(0.5, dx, 0.5, dy)
+		b.Size = UDim2.new(0, SLOT, 0, SLOT)
+		b.BackgroundColor3 = C.surfaceHi; b.BorderSizePixel = 0
+		b.Text = ""; b.AutoButtonColor = false; b.ZIndex = 21
+		tagTheme(b, "BackgroundColor3", "surfaceHi")
+		Instance.new("UICorner", b).CornerRadius = UDim.new(0.5, 0)
+		local ar = Instance.new("UIAspectRatioConstraint", b)
+		ar.AspectRatio = 1; ar.AspectType = Enum.AspectType.FitWithinMaxSize
+		local stroke = createStroke(b, C.strokeStrong, 1, 0, "strokeStrong")
+		local pop = Instance.new("UIScale", b)
+		pop.Name = "Pop"; pop.Scale = 0
+
+		local plus = Instance.new("TextLabel", b)
+		plus.Name = "Plus"
+		plus.BackgroundTransparency = 1; plus.Size = UDim2.new(1, 0, 1, 0)
+		plus.Font = FONT.button; plus.TextSize = s(16); plus.Text = "+"
+		plus.TextColor3 = C.textMuted; plus.TextTransparency = 0.2
+		plus.ZIndex = 22
+
+		local vp = Instance.new("ViewportFrame", b)
+		vp.Name = "Preview"
+		vp.BackgroundTransparency = 1; vp.BorderSizePixel = 0
+		vp.Size = UDim2.new(1, 0, 1, 0)
+		vp.Visible = false; vp.ZIndex = 22
+		Instance.new("UICorner", vp).CornerRadius = UDim.new(0.5, 0)
+
+		b.MouseButton1Down:Connect(function()
+			tween(pop, {Scale = 0.9}, 0.06); SoundFx.click()
+		end)
+		b.MouseButton1Up:Connect(function() tween(pop, {Scale = 1}, 0.08) end)
+		b.MouseButton1Click:Connect(function()
+			local e = WH.quickEmotes[i]
+			if not e then showToast("Slot " .. i .. " kosong, pin emote dulu", "warn") return end
+			playEmoteFromList(e, WH.speed)
+		end)
+		b.Parent = arc
+		WH.slots[i] = {btn = b, vp = vp, plus = plus, stroke = stroke, pop = pop, gen = 0}
+	end
+
+	-- speed button di pusat arc
+	local sp = createButton(arc, {
+		uiSize = UDim2.new(0, SPD, 0, SPD), pos = UDim2.new(0.5, 0, 0.5, 0),
+		bgKey = "accent", textKey = "onAccent", text = "1x",
+		font = FONT.button, size = s(10), radius = math.floor(SPD / 2)
+	})
+	sp.Name = "SpeedBtn"
+	sp.AnchorPoint = Vector2.new(0.5, 0.5); sp.ZIndex = 22
+	sp:SetAttribute("_noHover", true)
+	local spAr = Instance.new("UIAspectRatioConstraint", sp)
+	spAr.AspectRatio = 1; spAr.AspectType = Enum.AspectType.FitWithinMaxSize
+	WH.speedPop = Instance.new("UIScale", sp)
+	WH.speedPop.Name = "Pop"; WH.speedPop.Scale = 0
+	sp.MouseButton1Click:Connect(function()
+		WH.speedIdx = WH.speedIdx % #WH.speeds + 1
+		WH.speed = WH.speeds[WH.speedIdx]
+		WH.update(); WH.applySpeed(); WH.applySlotSpeed()
+		showToast("Emote speed: " .. string.format("%gx", WH.speed), "info")
+	end)
+	WH.speedBtn = sp
+
+	-- emoteDockTab: kapsul di tepi kiri (sudut kanan membulat)
+	local dock = Instance.new("Frame")
+	dock.Name = "emoteDockTab"
+	dock.AnchorPoint = Vector2.new(0, 0.5)
+	dock.Position = UDim2.new(0, 0, 0.5, 0)
+	dock.Size = UDim2.new(0, DOCK_W, 0, DOCK_H)
+	dock.BackgroundTransparency = 1
+	dock.ZIndex = 22
+	local body = Instance.new("Frame", dock)
+	body.Name = "Body"
+	body.Position = UDim2.new(0, -s(14), 0, 0) -- sisi kiri keluar layar
+	body.Size = UDim2.new(1, s(14), 1, 0)
+	body.BackgroundColor3 = C.panel; body.BackgroundTransparency = 0.2
+	body.BorderSizePixel = 0; body.ZIndex = 22
+	tagTheme(body, "BackgroundColor3", "panel")
+	createCorner(body, s(13))
+	createStroke(body, C.accent, 1, 0.35, "accent")
+	local lbl = Instance.new("TextLabel", dock)
+	lbl.Name = "Logo"
+	lbl.BackgroundTransparency = 1; lbl.Size = UDim2.new(1, 0, 1, 0)
+	lbl.Font = FONT.title; lbl.TextSize = s(11); lbl.Text = "M\nV"
+	lbl.TextColor3 = C.text; lbl.ZIndex = 23
+	tagTheme(lbl, "TextColor3", "text")
+	local dockScale = Instance.new("UIScale", dock)
+	dockScale.Scale = 1
+	local hit = Instance.new("TextButton", dock)
+	hit.Name = "Hit"
+	hit.BackgroundTransparency = 1; hit.Size = UDim2.new(1, 0, 1, 0)
+	hit.Text = ""; hit.AutoButtonColor = false; hit.ZIndex = 24
+	hit.MouseEnter:Connect(function() tween(dockScale, {Scale = 1.08}, 0.12) end)
+	hit.MouseLeave:Connect(function() tween(dockScale, {Scale = 1}, 0.12) end)
+	hit.MouseButton1Down:Connect(function()
+		tween(dockScale, {Scale = 0.92}, 0.08); SoundFx.click()
+	end)
+	hit.MouseButton1Up:Connect(function() tween(dockScale, {Scale = 1}, 0.1) end)
+	hit.MouseButton1Click:Connect(function()
+		if WH.isOpen then WH.close() else WH.open() end
+	end)
+	dock.Parent = gui
+	WH.dock, WH.dockBody, WH.dockLabel = dock, body, lbl
+
+	-- tombol header: tampilkan / sembunyikan dock
+	WH.toggleBtn.MouseButton1Click:Connect(function()
+		local on = not dock.Visible
+		if not on then WH.close(true) end
+		dock.Visible = on
+		WH.paintToggle(on)
+		showToast(on and "Emote Dock: ON" or "Emote Dock: OFF", "info")
+	end)
+	WH.paintToggle(true)
+
+	WH.update()
+	-- panasin cache animasi slot yang sudah tersimpan
+	task.delay(1, function()
+		for i = 1, 4 do
+			local q = WH.quickEmotes[i]
+			if q then resolveEmoteAnimId(q.Id) end
+		end
+	end)
+end
+
+WH.build()
 
 local previewEmoteGen = 0
 local previewEmoteConn = nil
@@ -1768,7 +2280,7 @@ local masterRenderGen = 0
 local masterConn = nil
 
 local function stopAllMaster()
-	previewEmoteGen = previewEmoteGen + 1 -- PATCH: batalin thread preview emote yang masih jalan
+	previewEmoteGen = previewEmoteGen + 1
 	if previewEmoteConn then previewEmoteConn:Disconnect(); previewEmoteConn = nil end
 	if previewEmoteTrack then pcall(function() previewEmoteTrack:Stop() end); previewEmoteTrack = nil end
 	if masterConn then masterConn:Disconnect(); masterConn = nil end
@@ -1876,7 +2388,7 @@ local function previewEmoteInMaster(e)
 			return
 		end
 		local resolvedId = resolveEmoteAnimId(e.Id)
-		if myGen ~= previewEmoteGen then return end -- PATCH: user udah pindah selagi resolve
+		if myGen ~= previewEmoteGen then return end
 		local animId = resolvedId or ("rbxassetid://" .. tostring(e.Id))
 		local anim = Instance.new("Animation"); anim.AnimationId = animId
 		local ok, track = pcall(function()
@@ -1963,7 +2475,6 @@ refreshAnimButtonVisuals = function()
 	end
 end
 
--- bookmark button juga rawan hover-abu2 di mobile
 bookmarkBtn:SetAttribute("_noHover", true)
 
 bookmarkBtn.MouseButton1Click:Connect(function()
@@ -2281,17 +2792,23 @@ local function createBundleCard(bundle, idx)
 	box.Destroying:Connect(function()
 		pcall(task.cancel, loopThread)
 		if conn then conn:Disconnect() end
+		-- r3.1.0: destroy clone karakter biar RAM ga numpuk
+		if dummy then WH.try("destroy dummy", function() dummy:Destroy() end) end
 	end)
 end
 
--- PATCH: emote card builder (anti freeze)
--- 1 tabel EM biar ga nambah banyak local (batas 200 local per scope)
+-- ===== EMOTE CARD BUILDER (anti freeze + anti leak) =====
 local EM = {queue = {}, live = {}, building = false, tpl = nil, tplChar = nil, loop = nil}
 
 function EM.getTemplate()
 	local char = lp.Character
 	if not char then return nil end
 	if EM.tpl and EM.tplChar == char then return EM.tpl end
+	-- r3.1.0: template lama (karakter lama) di-destroy
+	if EM.tpl then
+		WH.try("destroy old tpl", function() EM.tpl:Destroy() end)
+		EM.tpl, EM.tplChar = nil, nil
+	end
 	local wasArch = char.Archivable
 	char.Archivable = true
 	local c = char:Clone()
@@ -2309,7 +2826,7 @@ function EM.ensureLoop()
 	local acc = 0
 	EM.loop = rs.RenderStepped:Connect(function(dt)
 		if not gui.Parent then
-			EM.loop:Disconnect(); EM.loop = nil; table.clear(EM.live); return
+			EM.cleanup(); return
 		end
 		acc = acc + dt
 		if acc < 1/30 then return end
@@ -2318,6 +2835,8 @@ function EM.ensureLoop()
 		local bot = top + gridScroller.AbsoluteWindowSize.Y
 		for card, info in pairs(EM.live) do
 			if not card.Parent then
+				-- r3.1.0: kartu udah ilang -> destroy clone-nya juga
+				if info.clone then WH.try("destroy orphan clone", function() info.clone:Destroy() end) end
 				EM.live[card] = nil
 			else
 				local y = card.AbsolutePosition.Y
@@ -2357,7 +2876,7 @@ function EM.build(card, vp, skel, e)
 			local aid = resolveEmoteAnimId(e.Id)
 			if not aid or not card.Parent then return end
 			local anim = Instance.new("Animation"); anim.AnimationId = aid
-			pcall(function()
+			WH.try("emote card anim", function()
 				local tr = animator:LoadAnimation(anim)
 				tr.Looped = true; tr:Play()
 				info.tr = tr
@@ -2373,12 +2892,46 @@ function EM.run()
 		while #EM.queue > 0 do
 			local job = table.remove(EM.queue, 1)
 			if job.card.Parent then
-				pcall(EM.build, job.card, job.vp, job.skel, job.e)
+				WH.try("EM.build", EM.build, job.card, job.vp, job.skel, job.e)
 				task.wait(0.06)
 			end
 		end
 		EM.building = false
 	end)
+end
+
+-- r3.1.0: reset = bersihin antrian + destroy semua clone live (dipanggil tiap search/ganti tab)
+function EM.reset()
+	table.clear(EM.queue)
+	for card, info in pairs(EM.live) do
+		if info.tr then WH.try("stop emote track", function() info.tr:Stop() end) end
+		if info.clone then WH.try("destroy emote clone", function() info.clone:Destroy() end) end
+		EM.live[card] = nil
+	end
+end
+
+-- r3.1.0: cleanup total (gui destroyed / __FeUgcAnimKill / re-execute)
+function EM.cleanup()
+	EM.reset()
+	if EM.loop then EM.loop:Disconnect(); EM.loop = nil end
+	if EM.tpl then WH.try("destroy tpl", function() EM.tpl:Destroy() end) end
+	EM.tpl, EM.tplChar, EM.building = nil, nil, false
+end
+
+do
+	local env = (typeof(getgenv) == "function" and getgenv()) or _G
+	WH.getTemplate = EM.getTemplate -- dipakai preview 3D slot (EM didefinisikan setelah WH)
+	env.__MVCleanup = function()
+		WH.try("cleanup", function()
+			stopAllMaster()
+			for _, t in ipairs(activeGridThreads) do pcall(task.cancel, t) end
+			local wm = masterViewport:FindFirstChildOfClass("WorldModel")
+			if wm then wm:ClearAllChildren() end
+			WH.cleanup()
+			EM.cleanup()
+		end)
+	end
+	gui.Destroying:Connect(env.__MVCleanup)
 end
 
 local function createEmoteCard(e, idx)
@@ -2445,10 +2998,11 @@ local function createEmoteCard(e, idx)
 	btnRow.ZIndex = 5
 
 	local alreadySaved = savedEmotes[tostring(e.Id)] ~= nil
-	local saveBtn = Instance.new("TextButton", btnRow)
-	saveBtn.Size = UDim2.new(0.5, -s(1), 1, 0)
-	saveBtn.Position = UDim2.new(0, 0, 0, 0)
 	local t0 = Themes[Theme]
+
+	local saveBtn = Instance.new("TextButton", btnRow)
+	saveBtn.Position = UDim2.new(0, 0, 0, 0)
+	saveBtn.Size = UDim2.new(0.35, -s(2), 1, 0)
 	saveBtn.BackgroundColor3 = alreadySaved and t0.accent or t0.surfaceHi
 	saveBtn.TextColor3 = alreadySaved and t0.onAccent or t0.text
 	saveBtn.Text = alreadySaved and "SAVED" or "SAVE"
@@ -2461,10 +3015,7 @@ local function createEmoteCard(e, idx)
 	saveBtn:SetAttribute("_tk_BackgroundColor3", alreadySaved and "accent" or "surfaceHi")
 	saveBtn:SetAttribute("_tk_TextColor3", alreadySaved and "onAccent" or "text")
 	createCorner(saveBtn, R_SMALL)
-	saveBtn.MouseButton1Down:Connect(function()
-		saveBtn.Size = UDim2.new(0.5, -s(1), 1, -1); SoundFx.click()
-	end)
-	saveBtn.MouseButton1Up:Connect(function() saveBtn.Size = UDim2.new(0.5, -s(1), 1, 0) end)
+	WH.press(saveBtn)
 	saveBtn.MouseButton1Click:Connect(function()
 		local nowS = toggleEmoteSave(e)
 		local t = Themes[Theme]
@@ -2486,8 +3037,8 @@ local function createEmoteCard(e, idx)
 	end)
 
 	local playBtn = Instance.new("TextButton", btnRow)
-	playBtn.Size = UDim2.new(0.5, -s(1), 1, 0)
-	playBtn.Position = UDim2.new(0.5, s(2), 0, 0)
+	playBtn.Position = UDim2.new(0.35, 0, 0, 0)
+	playBtn.Size = UDim2.new(0.35, -s(2), 1, 0)
 	playBtn.BackgroundColor3 = C.accent
 	playBtn.TextColor3 = C.onAccent
 	playBtn.Text = "PLAY"
@@ -2500,11 +3051,67 @@ local function createEmoteCard(e, idx)
 	tagTheme(playBtn, "BackgroundColor3", "accent")
 	tagTheme(playBtn, "TextColor3", "onAccent")
 	createCorner(playBtn, R_SMALL)
-	playBtn.MouseButton1Down:Connect(function()
-		playBtn.Size = UDim2.new(0.5, -s(1), 1, -1); SoundFx.click()
+	WH.press(playBtn)
+	playBtn.MouseButton1Click:Connect(function() playEmoteFromList(e, WH.speed) end)
+
+	-- r3.1.2: badge "PIN n" di atas viewport (cuma tampil kalau emote dipin)
+	local pinBadge = Instance.new("TextLabel", card)
+	pinBadge.Name = "PinBadge"
+	pinBadge.Position = UDim2.new(0, pad + s(4), 0, pad + s(4))
+	pinBadge.Size = UDim2.new(0, s(38), 0, s(14))
+	pinBadge.BackgroundColor3 = C.accent
+	pinBadge.BackgroundTransparency = 0
+	pinBadge.BorderSizePixel = 0
+	pinBadge.Font = FONT.buttonSm
+	pinBadge.TextSize = s(8)
+	pinBadge.TextColor3 = C.onAccent
+	pinBadge.Text = ""
+	pinBadge.Visible = false
+	pinBadge.Active = false
+	pinBadge.ZIndex = 5
+	tagTheme(pinBadge, "BackgroundColor3", "accent")
+	tagTheme(pinBadge, "TextColor3", "onAccent")
+	createCorner(pinBadge, s(7))
+
+	-- tombol aksi pin (seragam, teks tetap "+")
+	local pinWheelBtn = Instance.new("TextButton", btnRow)
+	pinWheelBtn.Position = UDim2.new(0.70, 0, 0, 0)
+	pinWheelBtn.Size = UDim2.new(0.30, 0, 1, 0)
+	pinWheelBtn.Font = FONT.buttonSm
+	pinWheelBtn.Text = "+"
+	pinWheelBtn.TextSize = s(12)
+	pinWheelBtn.BackgroundColor3 = C.surfaceHi
+	pinWheelBtn.TextColor3 = C.text
+	tagTheme(pinWheelBtn, "BackgroundColor3", "surfaceHi")
+	tagTheme(pinWheelBtn, "TextColor3", "text")
+	pinWheelBtn.BorderSizePixel = 0
+	pinWheelBtn.AutoButtonColor = false
+	pinWheelBtn.ClipsDescendants = true
+	pinWheelBtn.ZIndex = 6
+	createCorner(pinWheelBtn, R_SMALL)
+	WH.press(pinWheelBtn)
+
+	local function refreshPinVisual()
+		local pinned
+		for i = 1, 4 do
+			local q = WH.quickEmotes[i]
+			if q and tostring(q.Id) == tostring(e.Id) then pinned = i break end
+		end
+		if pinned then
+			pinBadge.Text = "PIN " .. pinned
+			pinBadge.Visible = true
+		else
+			pinBadge.Visible = false
+		end
+	end
+	refreshPinVisual()
+	WH.pinRefs[card] = refreshPinVisual
+	card.Destroying:Connect(function() WH.pinRefs[card] = nil end)
+
+	pinWheelBtn.MouseButton1Click:Connect(function()
+		local slot = WH.pinEmote(e) -- update wheel + badge + preview 3D
+		showToast("Pinned ke slot " .. slot .. ": " .. truncate(e.Name, 14), "success")
 	end)
-	playBtn.MouseButton1Up:Connect(function() playBtn.Size = UDim2.new(0.5, -s(1), 1, 0) end)
-	playBtn.MouseButton1Click:Connect(function() playEmoteFromList(e) end)
 
 	local cardHit = Instance.new("TextButton", card)
 	cardHit.Size = UDim2.new(1, 0, 0, pad + thumbH + s(2) + nameH)
@@ -2517,7 +3124,6 @@ local function createEmoteCard(e, idx)
 		SoundFx.click(); previewEmoteInMaster(e)
 	end)
 
-	-- PATCH: build viewport lewat antrian (1 per 0.06s), rotate dihandle 1 loop global
 	table.insert(EM.queue, {card = card, vp = vp, skel = skel, e = e})
 	EM.run()
 end
@@ -2564,7 +3170,7 @@ local function renderMore()
 				if myToken ~= renderToken then renderingMore = false; return end
 				local item = list[i]
 				if item then createEmoteCard(item, i) end
-				task.wait() -- r3.0.1: pecah per-frame biar ga lag
+				task.wait()
 			end
 			if myToken ~= renderToken then renderingMore = false; return end
 			renderedCount = last
@@ -2586,7 +3192,7 @@ local function renderMore()
 				if validMap[e.Id] ~= false then
 					validRendered = validRendered + 1
 					createEmoteCard(e, renderedCount + validRendered)
-					task.wait() -- r3.0.1: pecah per-frame
+					task.wait()
 				end
 				if validRendered >= ITEMS_PER_LOAD then break end
 			end
@@ -2624,7 +3230,7 @@ local function renderMore()
 			if myToken ~= renderToken then renderingMore = false; return end
 			local item = list[i]
 			if item then createBundleCard(item, i) end
-			task.wait() -- r3.0.1: pecah per-frame
+			task.wait()
 		end
 		if myToken ~= renderToken then renderingMore = false; return end
 		renderedCount = last
@@ -2643,8 +3249,8 @@ end
 
 executeSearch = function(query)
 	clearGridFull(); local token = renderToken; query = query or ""
-	-- PATCH: bersihin antrian + kartu emote lama
-	table.clear(EM.queue); table.clear(EM.live)
+	-- r3.1.0: destroy clone emote lama + bersihin antrian
+	EM.reset()
 	if currentTab == "Emotes" then
 		loadingOverlay.Visible = false; emoteFiltered = {}
 		if emoteLoadStatus:find("Loading") then pageLbl.Text = "Loading emotes..."; return end
@@ -2697,6 +3303,7 @@ executeSearch = function(query)
 				if #searchResults == 0 then drawEmptyState("No results found", "Try searching again.")
 				else renderMore() end
 			else
+				if not ok then warn("[MOTION VAULT Error]: SearchCatalog - " .. tostring(pages)) end
 				pageLbl.Text = "Error"
 				drawEmptyState("Search Error", "Coba lagi nanti.")
 				showToast("Search error", "error")
@@ -2711,7 +3318,6 @@ gridScroller:GetPropertyChangedSignal("CanvasPosition"):Connect(function()
 	if maxY > 0 and y >= maxY - s(80) then renderMore() end
 end)
 
--- r3.0.1: transisi warna tab smooth (tween), instant=true dipakai saat init / ganti theme
 refreshTabVisuals = function(instant)
 	local function paint(btn, active)
 		local bg = active and C.accent or C.bg
@@ -2736,7 +3342,6 @@ local function setTab(tabName)
 	if currentTab == tabName then return end
 	renderingMore = false
 	currentTab = tabName
-	-- PATCH: placeholder ikut tab
 	sb.PlaceholderText = (tabName == "Emotes") and "Search emotes..." or "Search animations..."
 	refreshTabVisuals()
 	savedSegmentHolder.Visible = (tabName == "Saved")
@@ -2771,7 +3376,7 @@ wearSelectedBtn.MouseButton1Click:Connect(function()
 		return
 	end
 	wearSelectedBtn.Text = "Loading..."
-	local okAll = pcall(function()
+	local okAll, errAll = pcall(function()
 		local payload = currentBundleItems[string.lower(activeMasterType)]
 		if not payload then return end
 		local tracks = get(payload.Id, nil, payload.AssetType)
@@ -2783,7 +3388,10 @@ wearSelectedBtn.MouseButton1Click:Connect(function()
 			else showToast("Slot apply failed", "error") end
 		else showToast("Failed to load", "error") end
 	end)
-	if not okAll then showToast("Equip error", "error") end
+	if not okAll then
+		warn("[MOTION VAULT Error]: wear selected - " .. tostring(errAll))
+		showToast("Equip error", "error")
+	end
 	wearSelectedBtn.Text = "Wear Selected"
 end)
 
@@ -2838,6 +3446,7 @@ applyTheme = function(newTheme, skipSave)
 	if refreshAnimButtonVisuals then refreshAnimButtonVisuals() end
 	if refreshSavedSegment then refreshSavedSegment(true) end
 	refreshBookmarkBtn()
+	if WH.update then WH.update() end
 	setIconName(themeBtn, (Theme == "Dark") and "sun" or "moon")
 	if previewBorder then
 		previewBorder.Image = (Theme == "Dark") and "rbxassetid://74516945382386" or "rbxassetid://108111145991423"
@@ -2886,4 +3495,4 @@ for _, btn in ipairs(shimmerButtons) do
 	table.insert(activeShimmers, sh)
 end
 
-print("[MOTION VAULT r3.0.1] Loaded -- @in66ar")
+print("[MOTION VAULT r3.2.0] Loaded -- @in66ar")
